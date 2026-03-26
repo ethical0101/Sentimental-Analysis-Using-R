@@ -1,0 +1,25 @@
+# R session and project files
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Large datasets and CSV outputs
+training.1600000.processed.noemoticon.csv
+sample_data.csv
+sentiment140_analysis_*.csv
+sentiment_analysis_results.csv
+
+# Generated visual outputs
+*.png
+*.pdf
+
+# Logs and temp files
+*.log
+*.tmp
+*.temp

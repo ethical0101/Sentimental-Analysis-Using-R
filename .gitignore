@@ -14,6 +14,8 @@ training.1600000.processed.noemoticon.csv
 sample_data.csv
 sentiment140_analysis_*.csv
 sentiment_analysis_results.csv
+mail_dataset_1000.csv
+training.2100.processed.noemoticon.csv
 
 # Generated visual outputs
 *.png

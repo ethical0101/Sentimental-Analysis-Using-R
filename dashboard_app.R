@@ -22,6 +22,7 @@ source("topic_modeling.R", local = TRUE)
 source("time_series_analysis.R", local = TRUE)
 source("machine_learning_models.R", local = TRUE)
 source("visualization.R", local = TRUE)
+source("unified_dataset_builder.R", local = TRUE)
 
 # =============================================================================
 # UI DEFINITION
@@ -42,6 +43,7 @@ ui <- dashboardPage(
         sidebarMenu(
             menuItem("📊 Dashboard", tabName = "dashboard", icon = icon("dashboard")),
             menuItem("📁 Data Input", tabName = "data_input", icon = icon("upload")),
+            menuItem("🧪 Manual Predictions", tabName = "manual_predictions", icon = icon("table")),
             menuItem("📈 Sentiment Analysis", tabName = "sentiment", icon = icon("chart-line")),
             menuItem("😊 Emotion Analysis", tabName = "emotion", icon = icon("smile")),
             menuItem("🎭 Sarcasm Detection", tabName = "sarcasm", icon = icon("theater-masks")),
@@ -146,7 +148,24 @@ ui <- dashboardPage(
             ),
 
             # ====================================================================
-            # TAB 3: SENTIMENT ANALYSIS
+            # TAB 3: MANUAL PREDICTIONS
+            # ====================================================================
+            tabItem(
+                tabName = "manual_predictions",
+                fluidRow(
+                    box(
+                        title = "Manual Prediction Details",
+                        status = "primary",
+                        solidHeader = TRUE,
+                        width = 12,
+                        p("Shows model confidence, sarcasm confidence, and final decision reason for manual text input."),
+                        DTOutput("manual_prediction_table")
+                    )
+                )
+            ),
+
+            # ====================================================================
+            # TAB 4: SENTIMENT ANALYSIS
             # ====================================================================
             tabItem(
                 tabName = "sentiment",
@@ -178,7 +197,7 @@ ui <- dashboardPage(
             ),
 
             # ====================================================================
-            # TAB 4: EMOTION ANALYSIS
+            # TAB 5: EMOTION ANALYSIS
             # ====================================================================
             tabItem(
                 tabName = "emotion",
@@ -210,7 +229,7 @@ ui <- dashboardPage(
             ),
 
             # ====================================================================
-            # TAB 5: SARCASM DETECTION
+            # TAB 6: SARCASM DETECTION
             # ====================================================================
             tabItem(
                 tabName = "sarcasm",
@@ -247,7 +266,7 @@ ui <- dashboardPage(
             ),
 
             # ====================================================================
-            # TAB 6: TOPIC MODELING
+            # TAB 7: TOPIC MODELING
             # ====================================================================
             tabItem(
                 tabName = "topics",
@@ -279,7 +298,7 @@ ui <- dashboardPage(
             ),
 
             # ====================================================================
-            # TAB 7: TIME TRENDS
+            # TAB 8: TIME TRENDS
             # ====================================================================
             tabItem(
                 tabName = "trends",
@@ -304,7 +323,7 @@ ui <- dashboardPage(
             ),
 
             # ====================================================================
-            # TAB 8: MACHINE LEARNING MODELS
+            # TAB 9: MACHINE LEARNING MODELS
             # ====================================================================
             tabItem(
                 tabName = "ml_models",
@@ -336,7 +355,7 @@ ui <- dashboardPage(
             ),
 
             # ====================================================================
-            # TAB 9: EXPORT REPORT
+            # TAB 10: EXPORT REPORT
             # ====================================================================
             tabItem(
                 tabName = "export",
@@ -379,10 +398,46 @@ server <- function(input, output, session) {
     analysis_results <- reactiveValues(
         data = NULL,
         raw_data = NULL,
+        manual_data = NULL,
         ts_results = NULL,
         topic_results = NULL,
         ml_results = NULL,
+        manual_predictions = NULL,
+        manual_predictor = NULL,
+        has_loaded_dataset = FALSE,
         analyzed = FALSE
+    )
+
+    # Load a trained model if available, otherwise train from unified dataset.
+    observeEvent(TRUE,
+        {
+            tryCatch(
+                {
+                    if (file.exists("sentiment_sarcasm_model.rds")) {
+                        analysis_results$manual_predictor <- readRDS("sentiment_sarcasm_model.rds")
+                        showNotification("Loaded sentiment+sarcasm predictor model.", type = "message", duration = 3)
+                    } else if (file.exists("unified_sentiment_sarcasm_dataset.csv")) {
+                        training_data <- read.csv("unified_sentiment_sarcasm_dataset.csv", stringsAsFactors = FALSE)
+                        analysis_results$manual_predictor <- train_manual_text_predictors(
+                            training_data = training_data,
+                            text_col = "text",
+                            sentiment_label_col = "ground_truth",
+                            sarcasm_label_col = "sarcasm_label",
+                            max_features = 1200
+                        )
+                        showNotification("Trained predictor from unified dataset.", type = "message", duration = 4)
+                    }
+                },
+                error = function(e) {
+                    showNotification(
+                        paste("Manual predictor initialization skipped:", e$message),
+                        type = "warning",
+                        duration = 6
+                    )
+                }
+            )
+        },
+        once = TRUE
     )
 
     # ============================================================================
@@ -438,6 +493,9 @@ server <- function(input, output, session) {
                     # Store results
                     incProgress(1.0, detail = "Complete!")
                     analysis_results$data <- data
+                    analysis_results$manual_data <- NULL
+                    analysis_results$manual_predictions <- NULL
+                    analysis_results$has_loaded_dataset <- TRUE
                     analysis_results$analyzed <- TRUE
 
                     showNotification("Analysis complete!", type = "message", duration = 3)
@@ -469,7 +527,7 @@ server <- function(input, output, session) {
                     # Create dataset
                     incProgress(0.1, detail = "Creating dataset...")
                     data <- create_manual_dataset(texts)
-                    analysis_results$raw_data <- data
+                    analysis_results$manual_data <- data
 
                     # Run analysis pipeline (same as CSV)
                     incProgress(0.2, detail = "Preprocessing...")
@@ -492,25 +550,108 @@ server <- function(input, output, session) {
                         min_word_length = 2,
                         min_term_doc_freq = 1
                     )
-                    analysis_results$topic_results <- topic_results
                     data <- topic_results$data
                     if (isTRUE(topic_results$skipped)) {
                         showNotification("Topic modeling skipped: not enough text for LDA.", type = "warning", duration = 5)
                     }
 
-                    incProgress(1.0, detail = "Complete!")
-                    analysis_results$data <- data
-                    analysis_results$ts_results <- NULL
-                    analysis_results$ml_results <- NULL
-                    analysis_results$analyzed <- TRUE
+                    # Model-assisted manual prediction for better sentiment accuracy.
+                    if (!is.null(analysis_results$manual_predictor)) {
+                        incProgress(0.9, detail = "Applying trained sentiment+sarcasm model...")
+                        model_preds <- predict_manual_text_with_models(texts, analysis_results$manual_predictor)
+                        analysis_results$manual_predictions <- model_preds
 
-                    showNotification("Text analysis complete!", type = "message", duration = 3)
+                        data <- data %>%
+                            left_join(
+                                model_preds %>%
+                                    select(
+                                        id,
+                                        model_sentiment,
+                                        model_sentiment_confidence,
+                                        known_feature_terms,
+                                        model_sarcasm,
+                                        model_sarcasm_confidence,
+                                        final_sentiment,
+                                        final_reason
+                                    ),
+                                by = "id"
+                            )
+
+                        # Use model sarcasm signal to improve manual sarcasm detection recall.
+                        model_sarcasm_flag <- !is.na(data$model_sarcasm) &
+                            data$model_sarcasm == "Sarcastic" &
+                            !is.na(data$model_sarcasm_confidence) &
+                            data$model_sarcasm_confidence >= 55
+
+                        data$is_sarcasm <- data$is_sarcasm | model_sarcasm_flag
+                        data$sarcasm_confidence <- pmax(
+                            data$sarcasm_confidence,
+                            ifelse(is.na(data$model_sarcasm_confidence), 0, data$model_sarcasm_confidence)
+                        )
+
+                        data$polarity <- ifelse(!is.na(data$final_sentiment), data$final_sentiment, data$polarity)
+                        showNotification("Manual text scored with trained model + sarcasm adjustment.", type = "message", duration = 4)
+                    } else {
+                        analysis_results$manual_predictions <- NULL
+                    }
+
+                    incProgress(1.0, detail = "Complete!")
+                    analysis_results$manual_data <- data
+
+                    if (isTRUE(analysis_results$has_loaded_dataset)) {
+                        # Keep the loaded dataset results visible on all main tabs.
+                        showNotification(
+                            "Manual text analysis complete. Loaded dataset view remains active.",
+                            type = "message",
+                            duration = 4
+                        )
+                    } else {
+                        analysis_results$raw_data <- data
+                        analysis_results$data <- data
+                        analysis_results$topic_results <- topic_results
+                        analysis_results$ts_results <- NULL
+                        analysis_results$ml_results <- NULL
+                        analysis_results$analyzed <- TRUE
+                        showNotification("Text analysis complete!", type = "message", duration = 3)
+                    }
                 },
                 error = function(e) {
                     showNotification(paste("Error:", e$message), type = "error", duration = 10)
                 }
             )
         })
+    })
+
+    # ============================================================================
+    # MANUAL PREDICTIONS TAB OUTPUTS
+    # ============================================================================
+
+    output$manual_prediction_table <- renderDT({
+        req(analysis_results$analyzed)
+
+        if (is.null(analysis_results$manual_predictions)) {
+            return(datatable(
+                data.frame(Message = "Run manual text analysis to view detailed prediction confidence and reasons."),
+                options = list(dom = "t")
+            ))
+        }
+
+        details <- analysis_results$manual_predictions %>%
+            select(
+                id,
+                original_text,
+                model_sentiment,
+                model_sentiment_confidence,
+                known_feature_terms,
+                model_sarcasm,
+                model_sarcasm_confidence,
+                rule_sarcasm,
+                rule_sarcasm_confidence,
+                final_sentiment,
+                final_reason
+            )
+
+        datatable(details, options = list(pageLength = 10, scrollX = TRUE))
     })
 
     # ============================================================================
@@ -721,12 +862,15 @@ server <- function(input, output, session) {
 
     output$avg_confidence <- renderInfoBox({
         req(analysis_results$analyzed)
-        avg_conf <- mean(analysis_results$data$sarcasm_confidence[
+        sarcastic_conf <- analysis_results$data$sarcasm_confidence[
             analysis_results$data$is_sarcasm
-        ], na.rm = TRUE)
+        ]
+        avg_conf <- if (length(sarcastic_conf) == 0) NA_real_ else mean(sarcastic_conf, na.rm = TRUE)
+
+        value_text <- if (is.na(avg_conf)) "N/A" else paste0(round(avg_conf, 1), "%")
         infoBox(
             "Avg Confidence",
-            paste0(round(avg_conf, 1), "%"),
+            value_text,
             icon = icon("chart-line"),
             color = "yellow"
         )
@@ -735,12 +879,22 @@ server <- function(input, output, session) {
     output$sarcasm_pie <- renderPlotly({
         req(analysis_results$analyzed)
         sarcasm_summary <- get_sarcasm_summary(analysis_results$data)
-        plot_ly(sarcasm_summary$table, labels = ~Category, values = ~Count, type = "pie")
+        pie_data <- sarcasm_summary$table %>%
+            filter(Category %in% c("Sarcastic", "Non-Sarcastic"))
+
+        plot_ly(pie_data, labels = ~Category, values = ~Count, type = "pie")
     })
 
     output$sarcasm_sentiment <- renderPlotly({
         req(analysis_results$analyzed)
         analysis <- analyze_sarcasm_by_polarity(analysis_results$data)
+        if (nrow(analysis) == 0 || all(analysis$Sarcasm_Rate == 0, na.rm = TRUE)) {
+            return(
+                plotly_empty() %>%
+                    layout(title = "No sarcastic texts detected for current data")
+            )
+        }
+
         p <- ggplot(analysis, aes(x = polarity, y = Sarcasm_Rate, fill = polarity)) +
             geom_bar(stat = "identity") +
             theme_minimal() +

@@ -12,7 +12,7 @@ library(stringr)
 SARCASM_PATTERNS <- list(
     excessive_punct = "!{2,}|\\?{2,}",
     laughter = "😂|🤣|😆|lol|haha|lmao|rofl|hahaha",
-    sarcasm_words = "yeah right|as if|sure|obviously|totally|absolutely|certainly|definitely|great\\s+job",
+    sarcasm_words = "yeah right|as if|thanks for nothing|sure thing|great\\s+job|what a joke|oh great",
     quotes = "\\\"[^\\\"]*\\\"|\\'[^\\']*\\'",
     negative_context = "but|however|unfortunately|sadly|too bad|wish|if only|thanks for nothing",
     exaggeration = "best|worst|ever|never|always|perfect|totally|absolutely|completely|literally",
@@ -240,10 +240,21 @@ analyze_sarcasm_by_polarity <- function(data) {
         group_by(polarity, is_sarcasm) %>%
         summarise(Count = n(), .groups = "drop") %>%
         spread(key = is_sarcasm, value = Count, fill = 0) %>%
+        as.data.frame(stringsAsFactors = FALSE)
+
+    if (!"FALSE" %in% colnames(analysis)) {
+        analysis$`FALSE` <- 0
+    }
+    if (!"TRUE" %in% colnames(analysis)) {
+        analysis$`TRUE` <- 0
+    }
+
+    analysis <- analysis %>%
+        as_tibble() %>%
         rename(Non_Sarcastic = `FALSE`, Sarcastic = `TRUE`) %>%
         mutate(
             Total = Non_Sarcastic + Sarcastic,
-            Sarcasm_Rate = round((Sarcastic / Total) * 100, 2)
+            Sarcasm_Rate = ifelse(Total > 0, round((Sarcastic / Total) * 100, 2), 0)
         )
 
     return(analysis)

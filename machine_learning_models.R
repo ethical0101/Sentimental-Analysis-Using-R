@@ -81,10 +81,10 @@ create_ml_dtm <- function(data, max_features = 500) {
 #' Split Data into Training and Testing Sets
 #' @param ml_data Prepared ML dataset
 #' @param dtm_matrix Document-Term Matrix
-#' @param train_ratio Training set ratio (default: 0.7)
+#' @param train_ratio Training set ratio (default: 0.8)
 #' @return List with train and test splits
 #' @export
-split_train_test <- function(ml_data, dtm_matrix, train_ratio = 0.7) {
+split_train_test <- function(ml_data, dtm_matrix, train_ratio = 0.8) {
     set.seed(123)
 
     # Create stratified split
@@ -184,14 +184,141 @@ evaluate_model <- function(predictions, actual_labels) {
     ))
 }
 
+#' Train Torch Binary Classifier (GPU-aware)
+#' @param train_dtm Training feature matrix
+#' @param train_labels Training labels (factor: Negative/Positive)
+#' @param test_dtm Test feature matrix
+#' @param test_labels Test labels (factor: Negative/Positive)
+#' @param use_gpu Whether GPU execution is requested
+#' @param epochs Number of training epochs
+#' @param batch_size Batch size for mini-batch training
+#' @param learning_rate Optimizer learning rate
+#' @return List with model, predictions, evaluation, device and training metadata
+train_torch_classifier <- function(train_dtm,
+                                   train_labels,
+                                   test_dtm,
+                                   test_labels,
+                                   use_gpu = TRUE,
+                                   epochs = 8,
+                                   batch_size = 1024,
+                                   learning_rate = 0.001) {
+    if (!requireNamespace("torch", quietly = TRUE)) {
+        stop("Torch package is not installed")
+    }
+
+    gpu_enabled <- isTRUE(use_gpu) && isTRUE(torch::cuda_is_available())
+    device <- if (gpu_enabled) torch::torch_device("cuda") else torch::torch_device("cpu")
+
+    x_train <- as.matrix(train_dtm)
+    x_test <- as.matrix(test_dtm)
+
+    # Ensure numeric storage for torch tensors
+    storage.mode(x_train) <- "double"
+    storage.mode(x_test) <- "double"
+
+    y_train_num <- as.numeric(train_labels == "Positive")
+
+    x_train_t <- torch::torch_tensor(x_train, dtype = torch::torch_float(), device = device)
+    y_train_t <- torch::torch_tensor(matrix(y_train_num, ncol = 1), dtype = torch::torch_float(), device = device)
+    x_test_t <- torch::torch_tensor(x_test, dtype = torch::torch_float(), device = device)
+
+    model <- torch::nn_sequential(
+        torch::nn_linear(ncol(x_train), 256),
+        torch::nn_relu(),
+        torch::nn_dropout(p = 0.20),
+        torch::nn_linear(256, 64),
+        torch::nn_relu(),
+        torch::nn_linear(64, 1)
+    )
+
+    model$to(device = device)
+    optimizer <- torch::optim_adam(model$parameters, lr = learning_rate)
+    criterion <- torch::nn_bce_with_logits_loss()
+
+    n <- nrow(x_train)
+    batch_size <- max(32, min(batch_size, n))
+
+    model$train()
+    for (epoch in seq_len(epochs)) {
+        idx <- sample.int(n)
+        for (start in seq(1, n, by = batch_size)) {
+            end <- min(start + batch_size - 1, n)
+            batch_idx <- idx[start:end]
+
+            xb <- x_train_t[batch_idx, ]
+            yb <- y_train_t[batch_idx, ]
+
+            optimizer$zero_grad()
+            logits <- model(xb)
+            loss <- criterion(logits, yb)
+            loss$backward()
+            optimizer$step()
+        }
+    }
+
+    model$eval()
+    probs <- torch::with_no_grad({
+        torch::torch_sigmoid(model(x_test_t))$to(device = torch::torch_device("cpu"))
+    })
+
+    probs_vec <- as.numeric(as.matrix(probs))
+    pred_labels <- factor(
+        ifelse(probs_vec >= 0.5, "Positive", "Negative"),
+        levels = c("Negative", "Positive")
+    )
+
+    eval <- evaluate_model(pred_labels, test_labels)
+
+    return(list(
+        model = model,
+        predictions = pred_labels,
+        probabilities = probs_vec,
+        evaluation = eval,
+        device = if (gpu_enabled) "cuda" else "cpu",
+        gpu_enabled = gpu_enabled,
+        epochs = epochs,
+        batch_size = batch_size,
+        learning_rate = learning_rate
+    ))
+}
+
 #' Perform Complete Machine Learning Analysis
 #' @param data Dataframe with text and polarity
 #' @param label_column Column name to use as ground truth labels (default: "polarity")
-#' @param max_features Maximum DTM features (default: 500)
+#' @param train_ratio Training split ratio (default: 0.8)
+#' @param max_features Maximum DTM features (default: 1200)
+#' @param fast_mode If TRUE, uses faster defaults for large datasets
+#' @param use_gpu If TRUE, attempts torch-based GPU path and otherwise falls back to CPU models
 #' @return ML analysis results
 #' @export
-machine_learning_analysis <- function(data, label_column = "polarity", max_features = 500) {
+machine_learning_analysis <- function(data,
+                                      label_column = "polarity",
+                                      train_ratio = 0.8,
+                                      max_features = 1200,
+                                      fast_mode = TRUE,
+                                      use_gpu = TRUE) {
     message("Starting machine learning analysis...")
+
+    # Conservative speed optimization for large real-world datasets.
+    if (fast_mode && nrow(data) > 50000 && max_features > 800) {
+        max_features <- 800
+        message("Fast mode enabled: reducing max_features to 800 for faster training.")
+    }
+
+    gpu_enabled <- FALSE
+    gpu_backend <- "CPU"
+    torch_available <- requireNamespace("torch", quietly = TRUE)
+    if (use_gpu) {
+        if (torch_available && isTRUE(torch::cuda_is_available())) {
+            gpu_enabled <- TRUE
+            gpu_backend <- "GPU enabled (torch CUDA available)"
+        } else if (torch_available) {
+            gpu_backend <- "Torch installed, but CUDA GPU is unavailable (running on CPU)"
+        } else {
+            gpu_backend <- "GPU not configured (install 'torch' and CUDA runtime)"
+        }
+        message(sprintf("GPU status: %s", gpu_backend))
+    }
 
     # Prepare data
     ml_data <- prepare_ml_data(data, label_column = label_column)
@@ -200,7 +327,7 @@ machine_learning_analysis <- function(data, label_column = "polarity", max_featu
     dtm_matrix <- create_ml_dtm(ml_data, max_features = max_features)
 
     # Split data
-    splits <- split_train_test(ml_data, dtm_matrix, train_ratio = 0.7)
+    splits <- split_train_test(ml_data, dtm_matrix, train_ratio = train_ratio)
 
     # Train Naive Bayes
     message("\n[1/4] Training Naive Bayes...")
@@ -211,14 +338,52 @@ machine_learning_analysis <- function(data, label_column = "polarity", max_featu
     nb_pred <- predict(nb_model, splits$test_dtm)
     nb_eval <- evaluate_model(nb_pred, splits$test_labels)
 
-    # Train SVM
-    message("\n[3/4] Training SVM...")
-    svm_model <- train_svm(splits$train_dtm, splits$train_labels)
+    # Secondary classifier path: Torch when requested and available; otherwise SVM.
+    secondary_model_name <- "SVM"
+    torch_results <- NULL
 
-    # Predict with SVM
-    message("[4/4] Evaluating SVM...")
-    svm_pred <- predict(svm_model, splits$test_dtm)
-    svm_eval <- evaluate_model(svm_pred, splits$test_labels)
+    if (use_gpu && torch_available) {
+        message("\n[3/4] Training Torch classifier...")
+        # For very large datasets, use compact epochs/batch in fast mode.
+        torch_epochs <- if (fast_mode) 6 else 10
+        torch_batch <- if (fast_mode) 2048 else 1024
+
+        torch_results <- tryCatch(
+            {
+                train_torch_classifier(
+                    train_dtm = splits$train_dtm,
+                    train_labels = splits$train_labels,
+                    test_dtm = splits$test_dtm,
+                    test_labels = splits$test_labels,
+                    use_gpu = use_gpu,
+                    epochs = torch_epochs,
+                    batch_size = torch_batch,
+                    learning_rate = 0.001
+                )
+            },
+            error = function(e) {
+                warning(sprintf("Torch path failed, falling back to SVM: %s", e$message))
+                NULL
+            }
+        )
+    }
+
+    if (!is.null(torch_results)) {
+        secondary_model_name <- "Torch Neural Net"
+        message("[4/4] Evaluating Torch classifier...")
+        svm_model <- torch_results$model
+        svm_pred <- torch_results$predictions
+        svm_eval <- torch_results$evaluation
+        gpu_enabled <- isTRUE(torch_results$gpu_enabled)
+        gpu_backend <- sprintf("Torch backend (%s)", torch_results$device)
+    } else {
+        message("\n[3/4] Training SVM...")
+        svm_model <- train_svm(splits$train_dtm, splits$train_labels)
+
+        message("[4/4] Evaluating SVM...")
+        svm_pred <- predict(svm_model, splits$test_dtm)
+        svm_eval <- evaluate_model(svm_pred, splits$test_labels)
+    }
 
     # Compare with lexicon method (if polarity exists)
     if ("polarity" %in% names(ml_data)) {
@@ -233,6 +398,14 @@ machine_learning_analysis <- function(data, label_column = "polarity", max_featu
     return(list(
         nb_model = nb_model,
         svm_model = svm_model,
+        train_ratio = train_ratio,
+        max_features = max_features,
+        fast_mode = fast_mode,
+        secondary_model_name = secondary_model_name,
+        gpu_requested = use_gpu,
+        gpu_enabled = gpu_enabled,
+        gpu_status = gpu_backend,
+        torch_results = torch_results,
         nb_metrics = list(
             accuracy = as.numeric(nb_eval$metrics$Accuracy),
             precision = as.numeric(nb_eval$metrics$Precision),
@@ -265,8 +438,14 @@ machine_learning_analysis <- function(data, label_column = "polarity", max_featu
 #' @return Comparison table
 #' @export
 create_model_comparison <- function(ml_results) {
+    secondary_name <- if ("secondary_model_name" %in% names(ml_results)) {
+        ml_results$secondary_model_name
+    } else {
+        "SVM"
+    }
+
     comparison <- tibble(
-        Model = c("Lexicon-Based", "Naive Bayes", "SVM"),
+        Model = c("Lexicon-Based", "Naive Bayes", secondary_name),
         Accuracy = c(
             ml_results$lexicon_accuracy * 100,
             ml_results$nb_evaluation$metrics$Accuracy * 100,

@@ -1,0 +1,21 @@
+id,text,date,user,source
+1,"Thank you for the quick update, the issue is now resolved.",2026-03-20,alice@mail.com,manual
+2,"I am disappointed with the delay and lack of communication.",2026-03-20,bob@mail.com,manual
+3,"good good good good!!! best best best product ever!!!",2026-03-20,carol@mail.com,manual
+4,"Worst worst worst scam!!! totally useless!!!",2026-03-20,david@mail.com,manual
+5,"ok",2026-03-21,eva@mail.com,manual
+6,"We scheduled the deployment for Friday evening.",2026-03-21,farhan@mail.com,manual
+7,"Absolutely perfect amazing excellent incredible wonderful!!!",2026-03-21,grace@mail.com,manual
+8,"The ticket was resolved after the second retry.",2026-03-22,henry@mail.com,manual
+9,"Please review the attached patch notes.",2026-03-22,irene@mail.com,manual
+10,"Everything looks stable after monitoring.",2026-03-22,john@mail.com,manual
+11,"Amazing amazing amazing amazing amazing",2026-03-23,alice@mail.com,manual
+12,"Meeting moved to 3 PM.",2026-03-23,bob@mail.com,manual
+13,"The server is down and no one responded for hours.",2026-03-23,carol@mail.com,manual
+14,"This is literally the best perfect product always and never fails and absolutely incredible!!!",2026-03-24,david@mail.com,manual
+15,"Please find the attached invoice for March.",2026-03-24,eva@mail.com,manual
+16,"great",2026-03-24,farhan@mail.com,manual
+17,"Completely satisfied with the bug fix delivered today.",2026-03-25,grace@mail.com,manual
+18,"terrible terrible terrible terrible awful!!!",2026-03-25,henry@mail.com,manual
+19,"We will provide a status update tomorrow morning.",2026-03-25,irene@mail.com,manual
+20,"The patch was tested and approved by QA.",2026-03-25,john@mail.com,manual

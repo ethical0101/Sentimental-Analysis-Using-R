@@ -55,6 +55,7 @@ packages <- list(
   list(name = "shinydashboard", desc = "Dashboard UI components"),
   list(name = "DT", desc = "Interactive data tables"),
   list(name = "plotly", desc = "Interactive plots"),
+  list(name = "torch", desc = "GPU-capable deep learning backend"),
   list(name = "zoo", desc = "Time-series analysis"),
   list(name = "lubridate", desc = "Date manipulation"),
   list(name = "RColorBrewer", desc = "Color palettes"),
@@ -71,20 +72,20 @@ already_installed <- 0
 install_package_safe <- function(pkg_info, index, total) {
   pkg_name <- pkg_info$name
   pkg_desc <- pkg_info$desc
-  
+
   cat(sprintf("[%d/%d] %s - %s\n", index, total, pkg_name, pkg_desc))
-  
+
   # Check if already installed
   if (require(pkg_name, character.only = TRUE, quietly = TRUE)) {
     cat(sprintf("      ✓ Already installed\n"))
     return("already")
   }
-  
+
   # Try to install
   tryCatch({
     cat(sprintf("      Installing...\n"))
     install.packages(pkg_name, dependencies = TRUE, quiet = TRUE)
-    
+
     # Verify installation
     if (require(pkg_name, character.only = TRUE, quietly = TRUE)) {
       cat(sprintf("      ✓ Successfully installed\n"))
@@ -109,7 +110,7 @@ failed_packages <- c()
 
 for (i in seq_along(packages)) {
   result <- install_package_safe(packages[[i]], i, total_packages)
-  
+
   if (result == "success") {
     installed_success <- installed_success + 1
   } else if (result == "already") {
@@ -118,7 +119,7 @@ for (i in seq_along(packages)) {
     installed_fail <- installed_fail + 1
     failed_packages <- c(failed_packages, packages[[i]]$name)
   }
-  
+
   cat("\n")
   Sys.sleep(0.1)  # Small delay for readability
 }
@@ -147,29 +148,29 @@ if (installed_fail == 0) {
   cat("║         You are ready to run the analysis!                   ║\n")
   cat("║                                                               ║\n")
   cat("╚═══════════════════════════════════════════════════════════════╝\n\n")
-  
+
   cat("Next Steps:\n")
   cat("  1. Run: source('main.R')  # For command-line analysis\n")
   cat("  2. Or run: source('dashboard_app.R')  # For interactive dashboard\n\n")
-  
+
 } else {
   cat("╔═══════════════════════════════════════════════════════════════╗\n")
   cat("║                                                               ║\n")
   cat("║                 ⚠ INSTALLATION INCOMPLETE                    ║\n")
   cat("║                                                               ║\n")
   cat("╚═══════════════════════════════════════════════════════════════╝\n\n")
-  
+
   cat("Failed Packages:\n")
   for (pkg in failed_packages) {
     cat(sprintf("  ✗ %s\n", pkg))
   }
-  
+
   cat("\nTroubleshooting:\n")
   cat("  1. Check your internet connection\n")
   cat("  2. Try manually: install.packages('package_name')\n")
   cat("  3. Update R to latest version\n")
   cat("  4. Try a different CRAN mirror\n\n")
-  
+
   cat("To retry failed packages:\n")
   for (pkg in failed_packages) {
     cat(sprintf("  install.packages('%s', dependencies = TRUE)\n", pkg))
@@ -195,7 +196,7 @@ for (pkg_info in packages) {
   can_load <- suppressPackageStartupMessages(
     require(pkg, character.only = TRUE, quietly = TRUE)
   )
-  
+
   status <- if (can_load) "✓ OK" else "✗ FAIL"
   verification_results <- rbind(
     verification_results,
@@ -212,37 +213,43 @@ all_verified <- all(grepl("✓", verification_results$Status))
 
 if (all_verified) {
   cat("✓ All packages verified and ready to use!\n\n")
-  
+
+  if (suppressPackageStartupMessages(require("torch", character.only = TRUE, quietly = TRUE))) {
+    cat("Optional GPU Setup (Torch):\n")
+    cat("  Run this once to install Torch runtime binaries:\n")
+    cat("  torch::install_torch()\n\n")
+  }
+
   # Create data directory if it doesn't exist
   if (!dir.exists("data")) {
     dir.create("data")
     cat("✓ Created 'data' directory for your CSV files\n\n")
   }
-  
+
   # Check for sample data
   if (file.exists("sample_data.csv")) {
     cat("✓ Sample data file found\n\n")
-    
+
     cat("═════════════════════════════════════════════════════════════════\n")
     cat("                    READY TO RUN!                                 \n")
     cat("═════════════════════════════════════════════════════════════════\n\n")
-    
+
     cat("Quick Start:\n\n")
     cat("1. RUN ANALYSIS WITH SAMPLE DATA:\n")
     cat("   source('main.R')\n\n")
-    
+
     cat("2. LAUNCH INTERACTIVE DASHBOARD:\n")
     cat("   source('dashboard_app.R')\n\n")
-    
+
     cat("3. ANALYZE YOUR OWN CSV:\n")
     cat("   results <- run_complete_analysis('your_data.csv')\n")
     cat("   export_results_to_csv(results, 'output.csv')\n\n")
-    
+
   } else {
     cat("⚠ Sample data file (sample_data.csv) not found\n")
     cat("  Place your CSV file in the project directory\n\n")
   }
-  
+
 } else {
   cat("⚠ Some packages could not be loaded. Check failed packages above.\n\n")
 }

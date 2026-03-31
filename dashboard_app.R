@@ -18,6 +18,7 @@ source("preprocessing.R", local = TRUE)
 source("lexicon_sentiment.R", local = TRUE)
 source("emotion_detection.R", local = TRUE)
 source("sarcasm_detection.R", local = TRUE)
+source("fake_review_detection.R", local = TRUE)
 source("topic_modeling.R", local = TRUE)
 source("time_series_analysis.R", local = TRUE)
 source("machine_learning_models.R", local = TRUE)
@@ -47,6 +48,7 @@ ui <- dashboardPage(
             menuItem("📈 Sentiment Analysis", tabName = "sentiment", icon = icon("chart-line")),
             menuItem("😊 Emotion Analysis", tabName = "emotion", icon = icon("smile")),
             menuItem("🎭 Sarcasm Detection", tabName = "sarcasm", icon = icon("theater-masks")),
+            menuItem("⚠ Fake Review Detection", tabName = "fake_review", icon = icon("exclamation-triangle")),
             menuItem("🔍 Topic Modeling", tabName = "topics", icon = icon("tags")),
             menuItem("📉 Time Trends", tabName = "trends", icon = icon("chart-area")),
             menuItem("🤖 ML Models", tabName = "ml_models", icon = icon("robot")),
@@ -266,7 +268,40 @@ ui <- dashboardPage(
             ),
 
             # ====================================================================
-            # TAB 7: TOPIC MODELING
+            # TAB 7: FAKE REVIEW DETECTION
+            # ====================================================================
+            tabItem(
+                tabName = "fake_review",
+                fluidRow(
+                    box(
+                        title = "Fake Review Results",
+                        status = "primary",
+                        solidHeader = TRUE,
+                        width = 12,
+                        p("This tab uses the currently analyzed data from uploaded CSV or manual text input."),
+                        DTOutput("fake_review_table")
+                    )
+                ),
+                fluidRow(
+                    box(
+                        title = "Fake vs Genuine Reviews",
+                        status = "warning",
+                        solidHeader = TRUE,
+                        width = 6,
+                        plotlyOutput("fake_review_bar", height = 320)
+                    ),
+                    box(
+                        title = "Credibility Distribution",
+                        status = "info",
+                        solidHeader = TRUE,
+                        width = 6,
+                        plotlyOutput("credibility_pie", height = 320)
+                    )
+                )
+            ),
+
+            # ====================================================================
+            # TAB 8: TOPIC MODELING
             # ====================================================================
             tabItem(
                 tabName = "topics",
@@ -298,7 +333,7 @@ ui <- dashboardPage(
             ),
 
             # ====================================================================
-            # TAB 8: TIME TRENDS
+            # TAB 9: TIME TRENDS
             # ====================================================================
             tabItem(
                 tabName = "trends",
@@ -323,7 +358,7 @@ ui <- dashboardPage(
             ),
 
             # ====================================================================
-            # TAB 9: MACHINE LEARNING MODELS
+            # TAB 10: MACHINE LEARNING MODELS
             # ====================================================================
             tabItem(
                 tabName = "ml_models",
@@ -355,7 +390,7 @@ ui <- dashboardPage(
             ),
 
             # ====================================================================
-            # TAB 10: EXPORT REPORT
+            # TAB 11: EXPORT REPORT
             # ====================================================================
             tabItem(
                 tabName = "export",
@@ -407,6 +442,39 @@ server <- function(input, output, session) {
         has_loaded_dataset = FALSE,
         analyzed = FALSE
     )
+
+    # Ensure exported CSVs are always plain tabular data.
+    sanitize_for_csv_export <- function(df) {
+        if (is.null(df)) {
+            return(data.frame())
+        }
+
+        if (!is.data.frame(df)) {
+            if (is.list(df) && "data" %in% names(df) && is.data.frame(df$data)) {
+                df <- df$data
+            } else {
+                stop("Export data is not a valid data frame.")
+            }
+        }
+
+        df <- as.data.frame(df, stringsAsFactors = FALSE)
+
+        for (col_name in names(df)) {
+            col <- df[[col_name]]
+            if (is.list(col)) {
+                df[[col_name]] <- vapply(col, function(x) {
+                    if (length(x) == 0 || all(is.na(x))) {
+                        return("")
+                    }
+                    paste(as.character(unlist(x)), collapse = "; ")
+                }, FUN.VALUE = character(1))
+            } else if (is.factor(col)) {
+                df[[col_name]] <- as.character(col)
+            }
+        }
+
+        df
+    }
 
     # Load a trained model if available, otherwise train from unified dataset.
     observeEvent(TRUE,
@@ -471,6 +539,10 @@ server <- function(input, output, session) {
                     # Sarcasm detection
                     incProgress(0.5, detail = "Detecting sarcasm...")
                     data <- sarcasm_analysis(data)
+
+                    # Fake review detection
+                    incProgress(0.55, detail = "Detecting fake reviews...")
+                    data <- fake_review_analysis(data, text_col = "original_text")
 
                     # Topic modeling
                     incProgress(0.6, detail = "Modeling topics...")
@@ -541,6 +613,10 @@ server <- function(input, output, session) {
 
                     incProgress(0.6, detail = "Detecting sarcasm...")
                     data <- sarcasm_analysis(data)
+
+                    # Fake review detection
+                    incProgress(0.7, detail = "Detecting fake reviews...")
+                    data <- fake_review_analysis(data, text_col = "original_text")
 
                     incProgress(0.8, detail = "Modeling topics...")
                     topic_results <- topic_modeling_analysis(
@@ -909,6 +985,76 @@ server <- function(input, output, session) {
     })
 
     # ============================================================================
+    # FAKE REVIEW TAB OUTPUTS
+    # ============================================================================
+
+    output$fake_review_table <- renderDT({
+        req(analysis_results$analyzed)
+
+        table_data <- analysis_results$data
+
+        if (!"original_text" %in% names(table_data) && "text" %in% names(table_data)) {
+            table_data$original_text <- table_data$text
+        }
+        if (!"dominant_emotion" %in% names(table_data)) {
+            table_data$dominant_emotion <- "Neutral"
+        }
+        if (!"is_sarcasm" %in% names(table_data)) {
+            table_data$is_sarcasm <- FALSE
+        }
+        if (!"fake_review_flag" %in% names(table_data) || !"credibility_score" %in% names(table_data)) {
+            table_data <- fake_review_analysis(table_data, text_col = "original_text")
+        }
+
+        table_data <- table_data %>%
+            mutate(
+                emotion = ifelse(is.na(dominant_emotion), "Neutral", dominant_emotion),
+                sarcasm_flag = ifelse(is_sarcasm, "Sarcastic", "Non-Sarcastic")
+            ) %>%
+            select(
+                original_text,
+                polarity,
+                sentiment_score,
+                emotion,
+                sarcasm_flag,
+                fake_review_flag,
+                credibility_score
+            )
+
+        datatable(table_data, options = list(pageLength = 10, scrollX = TRUE))
+    })
+
+    output$fake_review_bar <- renderPlotly({
+        req(analysis_results$analyzed)
+        req("fake_review_flag" %in% names(analysis_results$data))
+
+        summary_data <- get_fake_review_summary(analysis_results$data)
+        p <- ggplot(summary_data, aes(x = fake_review_flag, y = Count, fill = fake_review_flag)) +
+            geom_col(width = 0.6) +
+            theme_minimal() +
+            labs(x = "Review Type", y = "Count", title = NULL) +
+            theme(legend.position = "none")
+
+        ggplotly(p)
+    })
+
+    output$credibility_pie <- renderPlotly({
+        req(analysis_results$analyzed)
+        req("credibility_band" %in% names(analysis_results$data))
+
+        cred_data <- analysis_results$data %>%
+            count(credibility_band, name = "Count") %>%
+            arrange(desc(Count))
+
+        plot_ly(
+            cred_data,
+            labels = ~credibility_band,
+            values = ~Count,
+            type = "pie"
+        )
+    })
+
+    # ============================================================================
     # TOPIC TAB OUTPUTS
     # ============================================================================
 
@@ -1008,7 +1154,24 @@ server <- function(input, output, session) {
         },
         content = function(file) {
             req(analysis_results$analyzed)
-            write.csv(analysis_results$data, file, row.names = FALSE)
+
+            tryCatch(
+                {
+                    export_data <- sanitize_for_csv_export(analysis_results$data)
+                    if (nrow(export_data) == 0) {
+                        stop("No analysis data available to export.")
+                    }
+                    write.csv(export_data, file, row.names = FALSE, na = "")
+                },
+                error = function(e) {
+                    showNotification(
+                        paste("Full export failed:", e$message),
+                        type = "error",
+                        duration = 8
+                    )
+                    stop(e)
+                }
+            )
         }
     )
 
@@ -1019,14 +1182,38 @@ server <- function(input, output, session) {
         content = function(file) {
             req(analysis_results$analyzed)
 
-            # Create summary
-            summary_data <- analysis_results$data %>%
-                select(
-                    id, original_text, polarity, sentiment_score, intensity,
-                    dominant_emotion, is_sarcasm, topic
-                )
+            tryCatch(
+                {
+                    data_for_summary <- sanitize_for_csv_export(analysis_results$data)
 
-            write.csv(summary_data, file, row.names = FALSE)
+                    if (!"original_text" %in% names(data_for_summary) && "text" %in% names(data_for_summary)) {
+                        data_for_summary$original_text <- data_for_summary$text
+                    }
+
+                    summary_cols <- c(
+                        "id", "original_text", "polarity", "sentiment_score", "intensity",
+                        "dominant_emotion", "is_sarcasm", "fake_review_flag",
+                        "credibility_score", "topic"
+                    )
+
+                    summary_data <- data_for_summary %>%
+                        select(any_of(summary_cols))
+
+                    if (ncol(summary_data) == 0) {
+                        stop("No summary columns available to export.")
+                    }
+
+                    write.csv(summary_data, file, row.names = FALSE, na = "")
+                },
+                error = function(e) {
+                    showNotification(
+                        paste("Summary export failed:", e$message),
+                        type = "error",
+                        duration = 8
+                    )
+                    stop(e)
+                }
+            )
         }
     )
 }

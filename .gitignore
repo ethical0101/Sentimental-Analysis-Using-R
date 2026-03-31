@@ -16,11 +16,13 @@ sentiment140_analysis_*.csv
 sentiment_analysis_results.csv
 mail_dataset_1000.csv
 training.2100.processed.noemoticon.csv
-
+fake_review_test_input.csv
+fake_review_test_results.csv
+*.tex
 # Generated visual outputs
 *.png
 *.pdf
-
+*.drawio
 # Logs and temp files
 *.log
 *.tmp

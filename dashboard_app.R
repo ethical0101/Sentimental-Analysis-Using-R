@@ -79,6 +79,10 @@ ui <- dashboardPage(
                     valueBoxOutput("neutral_pct", width = 3)
                 ),
                 fluidRow(
+                    valueBoxOutput("sentiment_index_box", width = 3),
+                    valueBoxOutput("trend_direction_box", width = 3)
+                ),
+                fluidRow(
                     box(
                         title = "Sentiment Distribution",
                         status = "primary",
@@ -112,14 +116,14 @@ ui <- dashboardPage(
                 tabName = "data_input",
                 fluidRow(
                     box(
-                        title = "Upload CSV File",
+                        title = "Upload Dataset File",
                         status = "primary",
                         solidHeader = TRUE,
                         width = 6,
-                        fileInput("csv_file", "Choose CSV File (must have 'text' column)",
-                            accept = c(".csv")
+                        fileInput("csv_file", "Choose File (.csv or .json)",
+                            accept = c(".csv", ".json")
                         ),
-                        helpText("Optional columns: 'date', 'user'"),
+                        helpText("Optional columns: 'date', 'user'. JSON with headline/short_description is supported."),
                         actionButton("load_csv", "Load & Analyze",
                             class = "btn-primary", icon = icon("play")
                         )
@@ -339,11 +343,27 @@ ui <- dashboardPage(
                 tabName = "trends",
                 fluidRow(
                     box(
-                        title = "Sentiment Trend Over Time",
+                        title = "Average Sentiment vs Time",
                         status = "primary",
                         solidHeader = TRUE,
                         width = 12,
                         plotlyOutput("trend_line", height = 400)
+                    )
+                ),
+                fluidRow(
+                    box(
+                        title = "Sentiment Trend Over Time",
+                        status = "info",
+                        solidHeader = TRUE,
+                        width = 6,
+                        plotlyOutput("trend_multiline", height = 350)
+                    ),
+                    box(
+                        title = "Daily Sentiment Index",
+                        status = "success",
+                        solidHeader = TRUE,
+                        width = 6,
+                        plotlyOutput("trend_sentiment_index", height = 350)
                     )
                 ),
                 fluidRow(
@@ -385,6 +405,22 @@ ui <- dashboardPage(
                         solidHeader = TRUE,
                         width = 6,
                         verbatimTextOutput("svm_confusion")
+                    )
+                ),
+                fluidRow(
+                    box(
+                        title = "Lexicon vs ML Accuracy",
+                        status = "warning",
+                        solidHeader = TRUE,
+                        width = 6,
+                        DTOutput("lexicon_ml_table")
+                    ),
+                    box(
+                        title = "Confusion Matrix - Lexicon Baseline",
+                        status = "danger",
+                        solidHeader = TRUE,
+                        width = 6,
+                        verbatimTextOutput("lexicon_confusion")
                     )
                 )
             ),
@@ -474,6 +510,22 @@ server <- function(input, output, session) {
         }
 
         df
+    }
+
+    get_sentiment_col <- function(df) {
+        if (is.null(df)) {
+            return("polarity")
+        }
+        if ("analysis_polarity" %in% names(df)) {
+            return("analysis_polarity")
+        }
+        if ("polarity" %in% names(df)) {
+            return("polarity")
+        }
+        if ("lexicon_based_polarity" %in% names(df)) {
+            return("lexicon_based_polarity")
+        }
+        return("polarity")
     }
 
     # Load a trained model if available, otherwise train from unified dataset.
@@ -746,7 +798,8 @@ server <- function(input, output, session) {
 
     output$positive_pct <- renderValueBox({
         req(analysis_results$analyzed)
-        pct <- mean(analysis_results$data$polarity == "Positive") * 100
+        sentiment_col <- get_sentiment_col(analysis_results$data)
+        pct <- mean(analysis_results$data[[sentiment_col]] == "Positive") * 100
         valueBox(
             paste0(round(pct, 1), "%"),
             "Positive",
@@ -757,7 +810,8 @@ server <- function(input, output, session) {
 
     output$negative_pct <- renderValueBox({
         req(analysis_results$analyzed)
-        pct <- mean(analysis_results$data$polarity == "Negative") * 100
+        sentiment_col <- get_sentiment_col(analysis_results$data)
+        pct <- mean(analysis_results$data[[sentiment_col]] == "Negative") * 100
         valueBox(
             paste0(round(pct, 1), "%"),
             "Negative",
@@ -768,12 +822,59 @@ server <- function(input, output, session) {
 
     output$neutral_pct <- renderValueBox({
         req(analysis_results$analyzed)
-        pct <- mean(analysis_results$data$polarity == "Neutral") * 100
+        sentiment_col <- get_sentiment_col(analysis_results$data)
+        pct <- mean(analysis_results$data[[sentiment_col]] == "Neutral") * 100
         valueBox(
             paste0(round(pct, 1), "%"),
             "Neutral",
             icon = icon("meh"),
             color = "yellow"
+        )
+    })
+
+    output$sentiment_index_box <- renderValueBox({
+        req(analysis_results$analyzed)
+        sentiment_col <- get_sentiment_col(analysis_results$data)
+
+        positive_count <- sum(analysis_results$data[[sentiment_col]] == "Positive", na.rm = TRUE)
+        negative_count <- sum(analysis_results$data[[sentiment_col]] == "Negative", na.rm = TRUE)
+        total_count <- nrow(analysis_results$data)
+
+        sentiment_index <- ifelse(total_count > 0,
+            (positive_count - negative_count) / total_count,
+            0
+        )
+
+        valueBox(
+            round(sentiment_index, 3),
+            "Sentiment Index",
+            icon = icon("balance-scale"),
+            color = "aqua"
+        )
+    })
+
+    output$trend_direction_box <- renderValueBox({
+        req(analysis_results$analyzed)
+
+        trend_label <- "Not Available"
+        if (!is.null(analysis_results$ts_results) &&
+            isTRUE(analysis_results$ts_results$has_time_variation) &&
+            !is.null(analysis_results$ts_results$trends$overall)) {
+            trend_label <- analysis_results$ts_results$trends$overall
+        }
+
+        trend_color <- dplyr::case_when(
+            trend_label == "Improving" ~ "green",
+            trend_label == "Declining" ~ "red",
+            trend_label == "Stable" ~ "yellow",
+            TRUE ~ "light-blue"
+        )
+
+        valueBox(
+            trend_label,
+            "Trend Direction",
+            icon = icon("chart-line"),
+            color = trend_color
         )
     })
 
@@ -800,6 +901,26 @@ server <- function(input, output, session) {
     output$key_insights <- renderPrint({
         req(analysis_results$analyzed)
         data <- analysis_results$data
+        sentiment_col <- get_sentiment_col(data)
+
+        positive_count <- sum(data[[sentiment_col]] == "Positive", na.rm = TRUE)
+        negative_count <- sum(data[[sentiment_col]] == "Negative", na.rm = TRUE)
+        total_count <- nrow(data)
+        sentiment_index <- ifelse(total_count > 0, (positive_count - negative_count) / total_count, 0)
+
+        trend_label <- "Not Available"
+        if (!is.null(analysis_results$ts_results) &&
+            isTRUE(analysis_results$ts_results$has_time_variation) &&
+            !is.null(analysis_results$ts_results$trends$overall)) {
+            trend_label <- analysis_results$ts_results$trends$overall
+        }
+
+        trend_desc <- dplyr::case_when(
+            trend_label == "Improving" ~ "an increasing sentiment trajectory over time",
+            trend_label == "Declining" ~ "a decreasing sentiment trajectory over time",
+            trend_label == "Stable" ~ "a stable sentiment trajectory over time",
+            TRUE ~ "insufficient temporal variation for trend interpretation"
+        )
 
         cat("KEY INSIGHTS\n")
         cat("=", rep("=", 70), "\n\n", sep = "")
@@ -807,12 +928,23 @@ server <- function(input, output, session) {
         cat("📊 Sentiment Overview:\n")
         cat(sprintf(
             "   - Most common sentiment: %s\n",
-            names(which.max(table(data$polarity)))
+            names(which.max(table(data[[sentiment_col]])))
         ))
         cat(sprintf(
             "   - Average sentiment score: %.2f\n",
             mean(data$sentiment_score)
         ))
+        cat(sprintf(
+            "   - Sentiment Index: %.3f\n",
+            sentiment_index
+        ))
+        cat(sprintf(
+            "   - Trend description: %s\n",
+            trend_desc
+        ))
+
+        cat("\n📘 Sentometrics Alignment:\n")
+        cat("   - Sentiment index indicates aggregated polarity behavior aligned with Sentometrics-style daily sentiment aggregation.\n")
 
         cat("\n😊 Emotion Analysis:\n")
         emotion_summary <- get_emotion_summary(data)
@@ -869,8 +1001,10 @@ server <- function(input, output, session) {
 
     output$sentiment_table <- renderDT({
         req(analysis_results$analyzed)
+        sentiment_col <- get_sentiment_col(analysis_results$data)
         data <- analysis_results$data %>%
-            select(id, text, sentiment_score, polarity, intensity) %>%
+            mutate(display_sentiment = .data[[sentiment_col]]) %>%
+            select(id, text, sentiment_score, display_sentiment, intensity) %>%
             arrange(desc(abs(sentiment_score)))
 
         datatable(data, options = list(pageLength = 15, scrollX = TRUE))
@@ -1096,6 +1230,28 @@ server <- function(input, output, session) {
         }
     })
 
+    output$trend_multiline <- renderPlotly({
+        req(analysis_results$ts_results)
+        if (analysis_results$ts_results$has_time_variation) {
+            p <- plot_sentiment_trend_multiline(analysis_results$ts_results$daily_sentiment)
+            ggplotly(p)
+        } else {
+            plotly_empty() %>%
+                layout(title = "No time variation in data")
+        }
+    })
+
+    output$trend_sentiment_index <- renderPlotly({
+        req(analysis_results$ts_results)
+        if (analysis_results$ts_results$has_time_variation) {
+            p <- plot_sentiment_index_trend(analysis_results$ts_results$daily_sentiment)
+            ggplotly(p)
+        } else {
+            plotly_empty() %>%
+                layout(title = "No time variation in data")
+        }
+    })
+
     output$critical_dates <- renderPrint({
         req(analysis_results$ts_results)
         if (analysis_results$ts_results$has_time_variation) {
@@ -1142,6 +1298,33 @@ server <- function(input, output, session) {
         cat("SVM CONFUSION MATRIX\n")
         cat(rep("=", 40), "\n\n", sep = "")
         print(analysis_results$ml_results$svm_evaluation$confusion_matrix)
+    })
+
+    output$lexicon_ml_table <- renderDT({
+        req(analysis_results$ml_results)
+
+        lexicon_acc <- analysis_results$ml_results$lexicon_accuracy * 100
+        nb_acc <- analysis_results$ml_results$nb_evaluation$metrics$Accuracy * 100
+        svm_acc <- analysis_results$ml_results$svm_evaluation$metrics$Accuracy * 100
+
+        comparison_df <- tibble(
+            Method = c("Lexicon-Based", "Naive Bayes", analysis_results$ml_results$secondary_model_name),
+            Accuracy_Percent = round(c(lexicon_acc, nb_acc, svm_acc), 2)
+        )
+
+        datatable(comparison_df, options = list(dom = "t"))
+    })
+
+    output$lexicon_confusion <- renderPrint({
+        req(analysis_results$ml_results)
+        cm <- analysis_results$ml_results$lexicon_confusion_matrix
+        if (is.null(cm)) {
+            cat("Lexicon confusion matrix not available for current data.\n")
+        } else {
+            cat("LEXICON BASELINE CONFUSION MATRIX\n")
+            cat(rep("=", 40), "\n\n", sep = "")
+            print(cm)
+        }
     })
 
     # ============================================================================

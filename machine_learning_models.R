@@ -107,6 +107,8 @@ split_train_test <- function(ml_data, dtm_matrix, train_ratio = 0.8) {
     ))
 
     return(list(
+        train_index = train_index,
+        test_index = setdiff(seq_len(nrow(ml_data)), train_index),
         train_dtm = train_dtm,
         test_dtm = test_dtm,
         train_labels = train_labels,
@@ -385,11 +387,24 @@ machine_learning_analysis <- function(data,
         svm_eval <- evaluate_model(svm_pred, splits$test_labels)
     }
 
-    # Compare with lexicon method (if polarity exists)
-    if ("polarity" %in% names(ml_data)) {
-        lexicon_accuracy <- mean(ml_data$polarity == ml_data$label)
-    } else {
-        lexicon_accuracy <- NA
+    # Compare with lexicon method using held-out test split.
+    lexicon_accuracy <- NA_real_
+    lexicon_confusion_matrix <- NULL
+    if ("lexicon_based_polarity" %in% names(ml_data)) {
+        lexicon_pred <- factor(
+            ml_data$lexicon_based_polarity[splits$test_index],
+            levels = c("Negative", "Positive")
+        )
+        lexicon_actual <- factor(splits$test_labels, levels = c("Negative", "Positive"))
+
+        valid_idx <- !is.na(lexicon_pred) & !is.na(lexicon_actual)
+        if (sum(valid_idx) > 0) {
+            lexicon_accuracy <- mean(lexicon_pred[valid_idx] == lexicon_actual[valid_idx])
+            lexicon_confusion_matrix <- table(
+                Predicted = lexicon_pred[valid_idx],
+                Actual = lexicon_actual[valid_idx]
+            )
+        }
     }
 
     message("\n✓ Machine learning analysis complete!")
@@ -423,6 +438,7 @@ machine_learning_analysis <- function(data,
         nb_evaluation = nb_eval,
         svm_evaluation = svm_eval,
         lexicon_accuracy = lexicon_accuracy,
+        lexicon_confusion_matrix = lexicon_confusion_matrix,
         test_data = list(
             dtm = splits$test_dtm,
             labels = splits$test_labels,
